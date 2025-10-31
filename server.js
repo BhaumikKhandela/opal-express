@@ -7,8 +7,13 @@ const dotenv = require('dotenv');
 const { Readable } = require('stream');
 const { default: axios } = require('axios');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
-
+const OpenAI = require('openai');
 dotenv.config();
+
+const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+});
+
 
 const s3 = new S3Client({
     credentials: {
@@ -68,6 +73,66 @@ io.on('connection', (socket) => {
         })
 
           const fileStatus = await s3.send(command);
+
+          if(fileStatus['$metadata'].httpStatusCode === 200) {
+             console.log('🟢 Video uploaded to aws');
+
+             if(processing.data.plan === 'PRO'){
+                fs.stat('temp_upload/' + data.filename, async(error, stat) => {
+                    if(!error){
+                        if(stat.size <= 25000000){
+                            const transcription = await openai.audio.transcriptions.create({
+                                file: fs.createReadStream('temp_upload/' + data.filename),
+                                model: 'whisper-1',
+                                response_format: 'text'
+                            })
+
+                            if(transcription){
+                                const completion = await openai.chat.completions.create({
+                                    model: 'gpt-3.5-turbo',
+                                    response_format: { type: 'json_object' },
+                                    messages: [
+                                        {
+                                            role: 'system',
+                                            content: `You are going to generate a title and a nice discription using the speech to text transcription provided: transacription(${transcription}) and the return it in json format as {'title': <Title you gave>, 'summary': <the summary you created>}`
+                                        }
+                                    ]
+                                })
+
+                                const titleAndSummaryGenerated = await axios.post(`${process.env.NEXT_API_HOST}recording/${data.userId}/transcribe`,
+                                    {
+                                        filename: data.filename,
+                                        content: completion.choices[0].message.content,
+                                        transcript: transcription,
+
+                                    }
+                                )
+                                
+                                if(titleAndSummaryGenerated.data.status !== 200){
+                                    console.log(`🔴 Error: Somethign went wrong with creating the title and summary`);
+                                }
+                            }
+                        }
+                    }
+                })
+             }
+             const stopProcessing = await axios.post(`${process.env.NEXT_API_HOST}recording/${data.userId}/complete`,{
+                filename: data.filename
+             });
+
+             if (stopProcessing.data.status !== 200){
+                console.log('🔴 Error: Something went wrong with completing the processing status');
+             }
+             if(stopProcessing.status === 200){
+                fs.unlink('temp_upload/' + data.filename, (err) => {
+                 if(!err){
+                    console.log(data.filename + ' ' + '🟢 deleted successfully');
+                 }
+                })
+             }
+          } else {
+            console.log('🔴 Error: Upload failed');
+          }
        });
 
     });
