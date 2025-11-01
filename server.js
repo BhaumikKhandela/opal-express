@@ -8,9 +8,14 @@ const { Readable } = require('stream');
 const { default: axios } = require('axios');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const OpenAI = require('openai');
+const Groq = require('groq-sdk');
 dotenv.config();
 
 const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+});
+
+const groqClient = new Groq({
     apiKey: process.env.OPENAI_API_KEY,
 });
 
@@ -56,90 +61,109 @@ io.on('connection', (socket) => {
     });
  
     socket.on('process-video', async (data) => {
-       recordedChunks = [];
-       fs.readStream('temp_upload/' + data.filename, async(error,file) => {
-        const processing = await axios.post(`${process.env.NEXT_API_HOST}recording/${data.userId}/processing`,
-            {
-                filename: data.filename
-            }
-        )
+  recordedChunks = [];
 
-        if(processing.data.status !== 200) return console.log('Error in processing status update');
+  const filePath = `temp_upload/${data.filename}`;
 
-        const Key = data.filename;
-        const Bucket = process.env.BUCKET_NAME;
-        const ContentType = 'video/webm';
-        const command = new PutObjectCommand({
-            Key,
-            Bucket,
-            ContentType,
-            Body: file
-        })
+  try {
+    const processing = await axios.post(
+      `${process.env.NEXT_API_HOST}recording/${data.userId}/processing`,
+      { filename: data.filename }
+    );
 
-          const fileStatus = await s3.send(command);
+    if (processing.data.status !== 200) {
+      console.log('Error in processing status update');
+      return;
+    }
 
-          if(fileStatus['$metadata'].httpStatusCode === 200) {
-             console.log('🟢 Video uploaded to aws');
+    const Key = data.filename;
+    const Bucket = process.env.BUCKET_NAME;
+    const ContentType = 'video/webm';
 
-             if(processing.data.plan === 'PRO'){
-                fs.stat('temp_upload/' + data.filename, async(error, stat) => {
-                    if(!error){
-                        if(stat.size <= 25000000){
-                            const transcription = await openai.audio.transcriptions.create({
-                                file: fs.createReadStream('temp_upload/' + data.filename),
-                                model: 'whisper-1',
-                                response_format: 'text'
-                            })
+    // ✅ Create a readable stream correctly
+    const fileStream = fs.createReadStream(filePath);
 
-                            if(transcription){
-                                const completion = await openai.chat.completions.create({
-                                    model: 'gpt-3.5-turbo',
-                                    response_format: { type: 'json_object' },
-                                    messages: [
-                                        {
-                                            role: 'system',
-                                            content: `You are going to generate a title and a nice discription using the speech to text transcription provided: transacription(${transcription}) and the return it in json format as {'title': <Title you gave>, 'summary': <the summary you created>}`
-                                        }
-                                    ]
-                                })
-
-                                const titleAndSummaryGenerated = await axios.post(`${process.env.NEXT_API_HOST}recording/${data.userId}/transcribe`,
-                                    {
-                                        filename: data.filename,
-                                        content: completion.choices[0].message.content,
-                                        transcript: transcription,
-
-                                    }
-                                )
-                                
-                                if(titleAndSummaryGenerated.data.status !== 200){
-                                    console.log(`🔴 Error: Somethign went wrong with creating the title and summary`);
-                                }
-                            }
-                        }
-                    }
-                })
-             }
-             const stopProcessing = await axios.post(`${process.env.NEXT_API_HOST}recording/${data.userId}/complete`,{
-                filename: data.filename
-             });
-
-             if (stopProcessing.data.status !== 200){
-                console.log('🔴 Error: Something went wrong with completing the processing status');
-             }
-             if(stopProcessing.status === 200){
-                fs.unlink('temp_upload/' + data.filename, (err) => {
-                 if(!err){
-                    console.log(data.filename + ' ' + '🟢 deleted successfully');
-                 }
-                })
-             }
-          } else {
-            console.log('🔴 Error: Upload failed');
-          }
-       });
-
+    const command = new PutObjectCommand({
+      Key,
+      Bucket,
+      ContentType,
+      Body: fileStream, // ✅ Use the stream directly
     });
+
+    const fileStatus = await s3.send(command);
+
+    if (fileStatus['$metadata'].httpStatusCode === 200) {
+      console.log('🟢 Video uploaded to AWS');
+
+      console.log('processing plan:', processing);
+      if (processing.data.plan === 'PRO') {
+        console.log('Starting transcription and summary generation...');
+        fs.stat(filePath, async (error, stat) => {
+          if (!error && stat.size <= 25_000_000) {
+            console.log('File size is within limit, proceeding with transcription.');
+            try {
+              const transcription = await groqClient.audio.translations.create({
+                file: fs.createReadStream(filePath),
+                model: 'whisper-large-v3',
+                response_format: 'text',
+              });
+
+              if (transcription) {
+                console.log('Transcription completed:', transcription);
+                const completion = await groqClient.chat.completions.create({
+                  model: 'llama-3.1-8b-instant',
+                  response_format: { type: 'json_object' },
+                  messages: [
+                    {
+                      role: 'system',
+                      content: `You are going to generate a title and a nice description using the speech-to-text transcription provided: transcription(${transcription}) and return it in JSON format as {'title': <Title>, 'summary': <Summary>}`,
+                    },
+                  ],
+                });
+
+                const titleAndSummaryGenerated = await axios.post(
+                  `${process.env.NEXT_API_HOST}recording/${data.userId}/transcribe`,
+                  {
+                    filename: data.filename,
+                    content: completion.choices[0].message.content,
+                    transcript: transcription,
+                  }
+                );
+
+                if (titleAndSummaryGenerated.data.status !== 200) {
+                  console.log(`🔴 Error: Something went wrong while creating the title and summary`);
+                }
+                console.log('Title and summary generated successfully');
+              }
+            } catch (err) {
+              console.error('🔴 Error during transcription or summary generation:', err);
+            }
+          }
+        });
+      }
+
+      const stopProcessing = await axios.post(
+        `${process.env.NEXT_API_HOST}recording/${data.userId}/complete`,
+        { filename: data.filename }
+      );
+
+      if (stopProcessing.data.status !== 200) {
+        console.log('🔴 Error: Something went wrong completing the processing status');
+      }
+
+      if (stopProcessing.status === 200) {
+        fs.unlink(filePath, (err) => {
+          if (!err) console.log(`${data.filename} 🟢 deleted successfully`);
+        });
+      }
+    } else {
+      console.log('🔴 Error: Upload failed');
+    }
+  } catch (err) {
+    console.error('🔴 Error in process-video:', err);
+  }
+});
+
 
     socket.on('disconnect', async(data) => {
         console.log('socket.id is disconnected', socket.id);
