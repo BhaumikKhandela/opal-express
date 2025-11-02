@@ -135,10 +135,12 @@ io.on('connection', (socket) => {
                 }
                 console.log('Title and summary generated successfully');
 
-                const embeddingResponse = await axios.post(`${process.env.NEXT_API_HOST}embed/${titleAndSummaryGenerated.data.videoId}`)
+                if(titleAndSummaryGenerated.data.status === 200 && titleAndSummaryGenerated.data.videoId){
+                const embeddingResponse = await axios.post(`${process.env.NEXT_API_HOST}embed/${titleAndSummaryGenerated.data.videoId}/video`)
 
                 if(embeddingResponse.data.status !== 201){
                 console.log('🔴 Embedding failed' + `${embeddingResponse.data.message}`);
+                }
         }
               }
             } catch (err) {
