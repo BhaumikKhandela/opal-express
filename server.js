@@ -134,6 +134,12 @@ io.on('connection', (socket) => {
                   console.log(`🔴 Error: Something went wrong while creating the title and summary`);
                 }
                 console.log('Title and summary generated successfully');
+
+                const embeddingResponse = await axios.post(`${process.env.NEXT_API_HOST}embed/${titleAndSummaryGenerated.videoId}`)
+
+                if(embeddingResponse.data.status !== 201){
+                console.log('🔴 Embedding failed' + `${embeddingResponse.data.message}`);
+        }
               }
             } catch (err) {
               console.error('🔴 Error during transcription or summary generation:', err);
@@ -156,11 +162,7 @@ io.on('connection', (socket) => {
           if (!err) console.log(`${data.filename} 🟢 deleted successfully`);
         });
 
-        const embeddingResponse = await axios.post(`${process.env.NEXT_API_HOST}embed/${stopProcessing.videoId}`)
-
-        if(embeddingResponse.data.status !== 201){
-          console.log('🔴 Embedding failed' + `${embeddingResponse.data.message}`);
-        }
+        
       }
     } else {
       console.log('🔴 Error: Upload failed');
