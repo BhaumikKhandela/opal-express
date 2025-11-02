@@ -155,6 +155,12 @@ io.on('connection', (socket) => {
         fs.unlink(filePath, (err) => {
           if (!err) console.log(`${data.filename} 🟢 deleted successfully`);
         });
+
+        const embeddingResponse = await axios.post(`${process.env.NEXT_API_HOST}embed/${stopProcessing.videoId}`)
+
+        if(embeddingResponse.data.status !== 201){
+          console.log('🔴 Embedding failed' + `${embeddingResponse.data.message}`);
+        }
       }
     } else {
       console.log('🔴 Error: Upload failed');
