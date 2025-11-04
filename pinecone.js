@@ -60,6 +60,24 @@ async function upsertVectors(vectors, namespace) {
   }
 }
 
+async function queryVectors(namespace, embedding, topK = 5){
+   console.log(`Querying namespace: ${namespace} for top ${topK} results`);
+  
+   try {
+
+    const queryResponse = await pineconeIndex.namespace(namespace).query({
+      vector: embedding,
+      topK: topK,
+      includeMetadata: true,
+      includeValues: false
+    });
+
+    return queryResponse;
+   }catch(error){
+    console.error('Error quering to Pinecone:', error);
+    throw error;
+   }
+}
 
 // Chunk transcript into smaller pieces for embedding
 function chunkTranscript(text, options = {}) {
@@ -102,5 +120,6 @@ module.exports = {
   pineconeIndex,
   getEmbedding,
   upsertVectors,
-  chunkTranscript
+  chunkTranscript,
+  queryVectors,
 };

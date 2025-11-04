@@ -269,4 +269,85 @@ server.listen(5001, () => {
     console.log('Server is running on port 5001');
 });
 
- 
+
+ app.post('/chat/:videoId', async(req,res) => {
+  try {
+
+    const { videoId } = req.params;
+    const { question } = req.body;
+
+    if(!question){
+      return res.status(400).json({
+        status: 400,
+        message: 'Question is missing from the body'
+      });
+    }
+
+    console.log(`🤖 Processing question for video ${videoId}: ${question}`);
+
+     const questionEmbedding = await getEmbedding(question);
+
+     const namespace = `video-${videoId}`;
+     const queryResponse = await queryVectors(namespace, questionEmbedding, 3);
+
+      console.log(`📊 Found ${queryResponse.matches.length} relevant chunks`);
+
+      if (!queryResponse.matches || queryResponse.matches.length === 0) {
+      return res.status(404).json({
+        status: 404,
+        message: 'No relevant information found for this question'
+      });
+    }
+
+    const relevantContext = queryResponse.matches
+      .map(match => match.metadata.text)
+      .join('\n\n');
+
+    const completion = await groqClient.chat.completions.create({
+      model: 'llama-3.1-8b-instant',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a helpful AI assistant that answers questions about a video based on its transcript. 
+          Use the following context from the video to answer the user's question accurately. 
+          If the context doesn't contain enough information, say so honestly.
+
+Context from video:
+${relevantContext}`
+        },
+        {
+          role: 'user',
+          content: question
+        }
+      ],
+      temperature: 0.7,
+      max_tokens: 500
+    });
+
+    const answer = completion.choices[0].message.content;
+    console.log(`✅ Generated answer: ${answer.substring(0, 100)}...`);
+
+    return res.status(200).json({
+      status: 200,
+      message: 'Answer generated successfully',
+      data: {
+        question,
+        answer,
+        sources: queryResponse.matches.map(match => ({
+          chunkIndex: match.metadata.chunkIndex,
+          relevanceScore: match.score,
+          text: match.metadata.text.substring(0, 200) + '...'
+        }))
+      }
+    });
+
+
+  }catch(error){
+    console.error('🔴 Error in /chat/:videoId endpoint:', error);
+    return res.status(500).json({
+      status: 500,
+      message: 'Failed to generate answer',
+      error: error.message
+    });
+  }
+ })
