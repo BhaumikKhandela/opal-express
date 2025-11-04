@@ -9,11 +9,10 @@ const { default: axios } = require('axios');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const OpenAI = require('openai');
 const Groq = require('groq-sdk');
+const { getEmbedding, chunkTranscript, upsertVectors, pineconeIndex } = require('./pinecone');
 dotenv.config();
 
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-});
+
 
 const groqClient = new Groq({
     apiKey: process.env.OPENAI_API_KEY,
@@ -136,7 +135,13 @@ io.on('connection', (socket) => {
                 console.log('Title and summary generated successfully');
 
                 if(titleAndSummaryGenerated.data.status === 200 && titleAndSummaryGenerated.data.videoId){
-                const embeddingResponse = await axios.post(`${process.env.NEXT_API_HOST}embed/${titleAndSummaryGenerated.data.videoId}/video`)
+                const embeddingResponse = await axios.post(`${process.env.SERVER_HOST}/embed/${titleAndSummaryGenerated.data.videoId}`,{
+                  
+                transcription: transcription,
+                title: JSON.parse(completion.choices[0].message.content).title,
+                summary: JSON.parse(completion.choices[0].message.content).summary
+    
+                });
 
                 if(embeddingResponse.data.status !== 201){
                 console.log('🔴 Embedding failed' + `${embeddingResponse.data.message}`);
@@ -179,6 +184,86 @@ io.on('connection', (socket) => {
         console.log('socket.id is disconnected', socket.id);
     })
 })
+
+app.post('/embed/:id', async(req, res) => {
+
+try{
+  const { id: videoId } = req.params;
+  const { transcription, title , summary } = req.body;
+
+   if(!transcription){
+    return res.status(400).json({
+      status: 400,
+      message:"Transcription is required"
+    })
+   }
+
+   console.log(`🟢 Starting embedding process for video ${videoId}`);
+
+   const chunks = chunkTranscript(transcription, {
+    maxChunkSize: 500,
+    overlap: 100
+   });
+
+   console.log(`Created chunks ${chunks.length} chunks from transcript`);
+
+   const vectors = [];;
+
+   for (let i =0 ; i< chunks.length; i++){
+    try {
+      const embedding = await getEmbedding(chunks[i]);
+      
+      vectors.push({
+        id: `${videoId}-chunk-${i}`,
+        values: embedding,
+        metadata: {
+          videoId: videoId,
+          chunkInex: i,
+          totalChunks: chunks.length,
+          text: chunks[i],
+          title: title || '',
+          summary: summary || '',
+          createdAt: new Date().toISOString
+        }
+      });
+
+      console.log(`✅ Generated embedding for chunk ${i + 1}/${chunks.length}`);
+    } catch(error){
+       console.error(`❌ Error generating embedding for chunk ${i}:`, error);
+       
+       return res.status(500).json({
+        status: 500,
+        message: 'Internal server error'
+       });
+    }
+   }
+
+   const namespace = `video-${videoId}`;
+
+   const upsertResponse = await upsertVectors(vectors, namespace);
+
+    console.log(`🟢 Successfully upserted ${vectors.length} vectors to Pinecone`);
+
+    return res.status(201).json({
+      status: 201,
+      message: 'Embeddings created successfully',
+      data: {
+        videoId,
+        chunksProcessed: chunks.length,
+        namespace,
+        upsertedCount: upsertResponse.upsertedCount || vectors.length
+      }
+    });
+
+} catch (error) {
+    console.error('🔴 Error in /embed/:id endpoint:', error);
+    return res.status(500).json({
+      status: 500,
+      message: 'Failed to create embeddings',
+      error: error.message
+    });
+  }
+});
 
 server.listen(5001, () => {
     console.log('Server is running on port 5001');
