@@ -9,7 +9,7 @@ const { default: axios } = require('axios');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const OpenAI = require('openai');
 const Groq = require('groq-sdk');
-const { getEmbedding, chunkTranscript, upsertVectors, pineconeIndex } = require('./pinecone');
+const { getEmbedding, chunkTranscript, upsertVectors, pineconeIndex , queryVectors} = require('./pinecone');
 dotenv.config();
 
 
@@ -265,11 +265,6 @@ try{
   }
 });
 
-server.listen(5001, () => {
-    console.log('Server is running on port 5001');
-});
-
-
  app.post('/chat/:videoId', async(req,res) => {
   try {
 
@@ -351,3 +346,7 @@ ${relevantContext}`
     });
   }
  })
+
+ server.listen(5001, () => {
+    console.log('Server is running on port 5001');
+});
