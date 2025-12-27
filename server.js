@@ -359,8 +359,11 @@ ${relevantContext}`,
 
 app.post("/generate/:videoId", async (req, res) => {
   try {
-    const { transcription, source } = await req.body();
-    const videoId = req.params("videoId");
+    console.log("Request received");
+    let { transcription, source } = req.body;
+    const { videoId } = req.params;
+
+    console.log(transcription, source, videoId);
     if (!source) {
       return res.status(404).json({
         status: 404,
@@ -368,15 +371,17 @@ app.post("/generate/:videoId", async (req, res) => {
       });
     }
 
-    if (transcription === "") {
+    if (transcription === "" || transcription === null) {
+      console.log("Inside transcription");
       const transcribe = await transcribeFromS3(source);
+      transcription = transcribe;
+      console.log("This is transcription type:" ,typeof(transcription));
       await axios.patch(
         `${process.env.NEXT_API_HOST}update-transcript/${videoId}`,
         {
           transcription,
         }
       );
-      transcription = transcribe;
     }
     const completion = await groqClient.chat.completions.create({
       model: "llama-3.1-8b-instant",
@@ -396,6 +401,7 @@ app.post("/generate/:videoId", async (req, res) => {
       description: JSON.parse(completion.choices[0].message.content).summary,
     });
   } catch (error) {
+    console.log("This is catch error", error);
     return res.status(500).json({
       status: 500,
       message: "Internal server error",
